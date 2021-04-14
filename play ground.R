@@ -1,0 +1,53 @@
+RUNS <- 1000
+DECISION.STEPS <- 12
+
+calculate_return <- function(alpha) {
+  risk_free_rate <- 1.03
+  risky_rate <- rlnorm(1) * 0.05 + 1
+  (1 - alpha) * risk_free_rate + alpha * risky_rate
+}
+
+simulations <- rerun(RUNS, replicate(DECISION.STEPS, runif(1) %>% calculate_return())) %>%
+  set_names(paste0("sim", 1:RUNS)) %>%
+  map(~ accumulate(., ~ .x * .y)) %>%
+  map_dfr(~ tibble(value = .x, step = 1:DECISION.STEPS), .id = "simulation")
+
+simulations %>%
+  ggplot(aes(x = step, y = value)) +
+  geom_line(aes(color = simulation)) +
+  theme(legend.position = "none") +
+  ggtitle("Simulations of returns from asset allocation")
+
+summary_values <- simulations %>%
+  group_by(step) %>%
+  summarise(mean_return = mean(value), max_return = max(value), min_return = min(value)) %>%
+  gather("series", "value", -step)
+
+summary_values %>%
+  ggplot(aes(x = step, y = value)) +
+  geom_line(aes(color = series)) +
+  ggtitle("Mean values from simulations")
+
+RUNS <- 100000
+
+simulations <- rpert(RUNS, min(df$estimated_cost), mean(df$estimated_cost), max(df$estimated_cost))
+mean(simulations)
+
+rlnorm(RUNS, ((log(10000000) + log(50000000))/2),(log(50000000) - (log(10000000))/3.29))
+
+simulations %>% 
+  ggplot(aes(x=risk)) +
+  geom_density(labels = scales::label_percent()) +
+  scale_x_continuous(labels = scales::label_number_si(prefix="$")) +
+  theme_bw() 
+
+
+ale_frame <- mutate(simulations, prob = 1 - percent_rank(simulations$risk))
+# sort the results in ascending order of loss magnitude
+ale_frame <- ale_frame[order(simulations$risk),]
+ggplot(ale_frame, mapping = aes(x = risk, y = prob))+
+  geom_path() + scale_y_continuous(labels = scales::percent)+
+  labs(y = "Probability of Loss")+
+  labs(x = "Annualized Loss Exposure (ALE)")+
+  scale_x_continuous(labels = scales::dollar)+
+  theme_bw()

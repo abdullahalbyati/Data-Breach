@@ -1,0 +1,1148 @@
+require(shinydashboard)
+require(mc2d)
+require(dplyr)
+require(plotly)
+require(ggplot2)
+library(shinycssloaders)
+library(scales)
+library(shinyBS)
+library(readr)
+library(DT)
+library(extrafont)
+library(evaluator)
+library(shiny)
+library(pander)
+library(DiagrammeR)
+library(bsplus)
+library(htmltools)
+
+############################# Global values start #############################################
+
+options(bitmapType='cairo') #Fix ggplot issue
+
+#Function to add plus sign and dollar sign
+with_plus_dollar <- function(x, ...)
+{
+    if (x > 0)
+    {
+        sprintf(
+            fmt = "+ $%s", 
+            format(x, ...)
+        )
+    }
+    else if (x < 0 )
+    {
+        sprintf(
+            fmt = "$%s", 
+            format(x, ...)
+        )
+    }
+    else 
+    {
+        x
+    }
+}
+# Function to add + sign only
+with_plus <- function(x, ...)
+{
+    if (x > 0)
+    {
+        sprintf(
+            fmt = "+ %s", 
+            format(x, ...)
+        )
+    }
+    else
+    {
+        x
+    }
+}
+
+## Deactivate all Buttons as long as shiny is busy
+jsdeactive <- HTML('
+$(document).on("shiny:busy", function() {
+ var inputs = document.getElementsByTagName("a");
+ console.log(inputs);
+ for (var i = 0; i < inputs.length; i++) {
+ inputs[i].disabled = true;
+ }
+});
+
+$(document).on("shiny:idle", function() {
+ var inputs = document.getElementsByTagName("a");
+ console.log(inputs);
+ for (var i = 0; i < inputs.length; i++) {
+ inputs[i].disabled = false;
+ }
+});'
+)
+
+#Hide slider until app is fully rendered
+jshide <- HTML('
+$(document).on("shiny:busy", function() {
+ $("#percentile").hide();
+});
+
+$(document).on("shiny:idle", function() {
+ $("#percentile").show();
+});'
+)
+
+####################################### Global values end ########################################
+
+
+#START-Content for popup modals
+
+TEF_Explination <- tags$div(
+    tags$p(HTML("<strong>The probable frequency, within a given time-frame (Annual), that threat agents will act in a manner that may result in loss</strong>")),
+    # tags$p("TEF is almost always expressed as a distribution using annualized values, for example: Between 0.1 and 0.5 times per year, with a most likely frequency of 0.3 times per year. 
+    #        This example demonstrates that annualized frequencies can be less than one (i.e., the frequency is expected to be less than once per year). 
+    #        The example above could thus be restated: Between once every 10 years and once every other year, but most likely once every 3 years. "),
+    tags$p("TEF can either be estimated directly or derived from estimates of Contact Frequency (CF) and Probability of Action (PoA)"),
+    tags$ul(
+        tags$li(HTML("<strong>Min :</strong> An estimate of the minimum amount of time this threat occurs during a time frame of 1 year")), 
+        tags$li(HTML("<strong>ML :</strong> An estimate of the most likely amount of time this loss occurs during a time frame of 1 year")), 
+        tags$li(HTML("<strong>Max :</strong> An estimate of the maximum of time this loss event occurs during a time frame of 1 year")),
+        tags$li(HTML("<strong>Conf :</strong> An estimate of your confidance in these numbers on a scale of 1 (low) to 5 (high)"))
+    ))
+
+TCAP_Explination <- tags$div(
+    tags$p(HTML("<strong>The TCap Continuum is simply a percentile scale from 1 to 100, which represents the comprehensive range of capabilities for a population of threat agents.</strong>")),
+    tags$p("The least capable threat agent in the population is considered to represent the first percentile, 
+         while the most capable threat agent in the population is considered to represent the 100th percentile. 
+         Everyone else falls somewhere in between."),
+    tags$ul(
+        tags$li(HTML("<strong>Min :</strong> An estimate of the minimum capabilities for a population of threat agents")), 
+        tags$li(HTML("<strong>ML :</strong> An estimate of the most likely capabilities for a population of threat agents")), 
+        tags$li(HTML("<strong>Max :</strong> An estimate of the maximum capabilities for a population of threat agents")),
+        tags$li(HTML("<strong>Conf :</strong> An estimate of your confidance in these numbers on a scale of 1 (low) to 5 (high)"))
+    ))
+
+DIFF_Explination <- tags$div(
+    tags$p(HTML("<strong>The level of difficulty that a threat agent must overcome</strong>")),
+    tags$p("This is how strong the controls we have in place in stoping the threat agents from causing loss.
+         The thing to keep in mind (and where many people make mistakes in their analyses) is that Difficulty is always measured against the TCap Continuum (our measurement scale) 
+         and never against the specific threat community you are analyzing against in your scenario."),
+    tags$ul(
+        tags$li(HTML("<strong>Min :</strong> An estimate of the minimum controlls capabilities (The level of difficulty) for a population of threat agents to overcome")), 
+        tags$li(HTML("<strong>ML :</strong> An estimate of the most likely controlls capabilities (The level of difficulty) for a population of threat agents to overcome")), 
+        tags$li(HTML("<strong>Max :</strong> An estimate of the maximum controlls capabilities (The level of difficulty) for a population of threat agents to overcome")),
+        tags$li(HTML("<strong>Conf :</strong> An estimate of your confidance in these numbers on a scale of 1 (low) to 5 (high)"))
+    ))
+
+LM_Explination <- tags$div(
+    tags$p(HTML("<strong>The probable magnitude of primary and secondary loss resulting from an event</strong>")),
+    tags$p("Losses in FAIR are divided into primary losses and secondary losses. Another term for this is guaranteed losses and conditional losses. 
+         Primary losses are typically where we put losses incurred directly by the organization, Secondary losses are typically where we put losses that are caused by actions that secondary stakeholders might take. If a secondary loss always occurs, there is no math reason for categorizing as a secondary loss.
+         Losses in FAIR are divided into 6 forms, to help structure the discussion with your subject matter experts. 
+         All the forms of loss get added together, but dividing them in this way helps organize the calculations.
+         The 6 forms of loss in FAIR are"),
+    tags$ul(
+        tags$li(HTML("<strong>Productivity Loss - lost sales, idle employees</strong>")), 
+        tags$li(HTML("<strong>Replacement costs</strong>")), 
+        tags$li(HTML("<strong>Response costs - hiring lawyers, forensic investigations, generators</strong>")),
+        tags$li(HTML("<strong>Competitive Advantage</strong>")), 
+        tags$li(HTML("<strong>Fines/Judgements</strong>")), 
+        tags$li(HTML("<strong>Reputation Damage - examples are uncaptured revenue, increased cost of capital</strong>"))
+    ),
+    tags$hr(),
+    tags$p(HTML("<strong>In this scenario we will not calculate each form of loss separately, 
+              but assume that we have considered each of those forms and come up with a range estimate of loss magnitude</strong>")),
+    tags$ul(
+        tags$li(HTML("<strong>Min :</strong> If this loss occurs what is the minimum dollar value amount that will be lost")), 
+        tags$li(HTML("<strong>ML:</strong> what is the likley dollar value amount lost")),
+        tags$li(HTML("<strong>Max :</strong> If this loss occurs what is the maximum dollar value amount that will be lost")),
+        tags$li(HTML("<strong>Conf :</strong> An estimate of your confidance in these numbers on a scale of 1 (low) to 5 (high)"))
+    )
+)
+
+ITER_Explination <- tags$div(
+    tags$p("How many iterations for the Monte Carlo Simulation the satndard is 10000 (more than enough to get accurate estimates) 
+         But you can adjust this up to 100000")
+)
+
+#Options for spinner
+options(spinner.color="#000000")
+options(spinner.type=8)
+#END-Content for popup modals
+
+########################################
+
+##### UI Starts Here
+
+########################################
+ui <- dashboardPage(skin = "black",
+    
+    dashboardHeader(title = "Risk The FAIR Approach (RTFA)", titleWidth = 450
+    ),
+    
+    dashboardSidebar(
+        width = 500,
+        textInput("rs", "Risk Statement", width = 450),
+        HTML("<hr>"),
+        
+        HTML( "<p style='font-size: 110%;'>","Threat Event Frequency (TEF) &nbsp;&nbsp",
+              "<i id='TEFexplain', style='font-size: 110%;' class='glyphicon glyphicon-info-sign'></i>", "</p>"),
+        fillRow(height = 50,
+                numericInput("tefl", "Min:", 10, min = 0, max = 100),
+                numericInput("tefml", "ML:", 20, min = 0, max = 100),
+                numericInput("tefh", "Max:", 100, min = 0, max = 100),
+                numericInput("tefconf", "Conf:", 4, min = 1, max = 5)
+        ),
+        HTML("<hr>"),
+        HTML( "<p style='font-size: 110%;'>","Threat Capability (TCAP) &nbsp;&nbsp",
+              "<i id='TCAPexplain', style='font-size: 110%;' class='glyphicon glyphicon-info-sign'></i>", "</p>"),
+        fillRow(height = 50,
+                numericInput("tcapl", "Min:", 20, min = 0, max = 100),
+                numericInput("tcapml", "ML:", 30, min = 0, max = 100),
+                numericInput("tcaph", "Max:", 70, min = 0, max = 100),
+                numericInput("tcapconf", "Conf:", 4, min = 1, max = 5)
+        ),
+        HTML("<hr>"),
+        HTML( "<p style='font-size: 110%;'>","Difficulty Presented By The Controls &nbsp;&nbsp",
+              "<i id='DIFFexplain', style='font-size: 110%;' class='glyphicon glyphicon-info-sign'></i>", "</p>"),
+        fillRow(height = 50,
+                numericInput("csl", "Min:", 40, min = 0, max = 100),
+                numericInput("csml", "ML:", 50, min = 0, max = 100),
+                numericInput("csh", "Max:", 60, min = 0, max = 100),
+                numericInput("csconf", "Conf:", 4, min = 1, max = 5)
+        ),
+        HTML("<hr>"),
+        HTML( "<p style='font-size: 110%;'>","Loss Magnitude &nbsp;&nbsp",
+              "<i id='LMexplain', style='font-size: 110%;' class='glyphicon glyphicon-info-sign'></i>", "</p>"),
+        fillRow(height = 50,
+                numericInput("lml", "Min:", 100, min = 0),
+                numericInput("lmml", "ML:", 500, min = 0),
+                numericInput("lmh", "Max:", 10000, min = 0),
+                numericInput("lmconf", "Conf:", 4, min = 1, max = 5)
+        ),
+        HTML("<hr>"),
+        HTML( "<p style='font-size: 110%;'>","Number of Iterations &nbsp;&nbsp",
+              "<i id='ITERexplain', style='font-size: 110%;' class='glyphicon glyphicon-info-sign'></i>", "</p>"),
+        numericInput("iterations", "Iterations:", 10000, min = 100, max = 100000, 
+                     step = 100, width = 450),
+        HTML("<br>"),
+        actionButton("runmodel", "Run Model")
+    ),
+    dashboardBody(
+
+        tags$head(
+            tags$style(HTML("
+  input[type=\"number\"] {
+    width: 110px;
+  }
+"))
+            , tags$script(jsdeactive), 
+            tags$script(jshide)),
+        tags$style(
+            ".irs-bar {",
+            "  border-color: transparent;",
+            "  background-color: transparent;",
+            "}",
+            ".irs-bar-edge {",
+            "  border-color: transparent;",
+            "  background-color: transparent;",
+            "}"
+        ),
+#Boxes css style can be modifide here
+        tags$style(HTML("
+
+
+.box.box-solid.box-primary>.box-header {  
+  color:#fff;
+  background:#000000
+                    }
+
+.box.box-solid.box-primary{
+box-shadow:0 4px 8px 0 rgba(0, 0, 0, 0.2), 0 6px 20px 0 rgba(0, 0, 0, 0.19);
+border-bottom-color:#666666;
+border-left-color:#666666;
+border-right-color:#666666;
+border-top-color:#666666;
+}
+
+                                    ")),
+
+        
+        # Boxes need to be put in a row (or column) 
+        fluidRow(
+            #START - Modals (MODALS Must stay in dashboard body to work)
+            bsModal("TEF", "What is Threat Event Frequency (TEF)?", "TEFexplain", size = "large", TEF_Explination),
+            bsModal("TCAP", "What is Threat Capability (TCAP)?", "TCAPexplain", size = "large", TCAP_Explination),
+            bsModal("DIFF", "What is Difficulty Presented By The Controls?", "DIFFexplain", size = "large", DIFF_Explination),
+            bsModal("LM", "What is Loss Magnitude (LM)?", "LMexplain", size = "large", LM_Explination),
+            bsModal("ITER", "What is Number of Iterations?", "ITERexplain", size = "large", ITER_Explination),
+            #END - Modals
+            tabBox(title = NULL, width = 12,id = "tabset1",height = "5000",
+                   tabPanel("Summary",       
+                            column(width = 12,
+                                   box(id = "percentile", width = 3, background = "light-blue",
+                                       sliderInput("percent", "ALE Percentile",
+                                                   min = 0, max = 100,
+                                                   value = 80),
+                                       htmlOutput("percentout")
+                                   ),
+                                   withSpinner(valueBoxOutput("agg_riskout", width = 3)),
+                                   valueBoxOutput("ELout", width = 3),
+                                   valueBoxOutput("loss_eventsout", width = 3)
+                            ),
+                             box(title = "Scenario Summary", status = "primary", solidHeader = TRUE, width = 12,
+                                         withSpinner(tableOutput("summaryout"))      
+                                     ),
+                            
+                            box(title = "Annual Expected Losses", status = "primary", solidHeader = TRUE,
+                                withSpinner(plotlyOutput("alehistout"))
+                            ),
+                            
+                            box(title = "Loss Exceedance Curve", status = "primary", solidHeader = TRUE,
+                                withSpinner(plotlyOutput("LECout"))
+                            ),
+                            
+                            fluidRow(
+                                column(width = 12,
+                                       box(title = "Events Distribution ", status = "primary", solidHeader = TRUE,
+                                           withSpinner(plotlyOutput("eventsout"))      
+                                       ),
+                                       box(title = "Loss Distribution ", status = "primary", solidHeader = TRUE,
+                                           withSpinner(plotlyOutput("lossdisout"))      
+                                       )
+                                )
+                                
+                            )
+                   ),
+                   tabPanel("Explanation",
+                            column(width = 12,
+                                   box(title = "Inputs", status = "primary", solidHeader = TRUE, width = 12,
+                                       withSpinner(htmlOutput("inputsOut"))
+                                   ),
+                                   box(title = "FAIR Ontology", status = "primary", solidHeader = TRUE, width = 12,
+                                       withSpinner(grVizOutput("digramout"))
+                                   ),
+                                   box(title = "Summary", status = "primary", solidHeader = TRUE, width = 12,
+                                       htmlOutput("summaryOut"),
+                                       tableOutput("summaryTableOut")
+                                   ),
+                                   box(title = "Annual Expected Losses", status = "primary", solidHeader = TRUE, width = 6, height = 650,
+                                       withSpinner(htmlOutput("ALEOut")),
+                                       plotlyOutput("alehistout2")
+                                   ),
+                                   box(title = "Loss Exceedance Curve", status = "primary", solidHeader = TRUE, width = 6, height = 650,
+                                       withSpinner(htmlOutput("LECOut")),
+                                       plotlyOutput("LECout2")
+                                   ),
+                                   box(title = "Threat Events and Loss Events", status = "primary", solidHeader = TRUE, width = 6, height = 700,
+                                       withSpinner(htmlOutput("vulnOut")),
+                                       plotlyOutput("eventsout2")
+                                   ),
+                                   box(title = "Controls/Difficulty Vs. Threat Capability", status = "primary", solidHeader = TRUE, width = 6, height = 700,
+                                       withSpinner(htmlOutput("diffOut"))
+                                   )
+                                   
+                            )
+                            
+                   ),
+                   
+                   tabPanel("What-If Analysis",
+                            column(width = 12,
+                                   box(title = "What-If Analysis", status = "primary", solidHeader = TRUE, width = 12,
+                                       
+                                       htmlOutput("diffWF"),
+                                       fillRow(height = 100, width = 400,
+                                               numericInput("cslwf", "Min:", 50, min = 0, max = 100),
+                                               numericInput("csmlwf", "ML:", 70, min = 0, max = 100),
+                                               numericInput("cshwf", "Max:", 80, min = 0, max = 100),
+                                               numericInput("csconfwf", "Conf:", 5, min = 1, max = 5)
+                                       ),
+                                       
+                                       actionButton("runwhatifmodel2", "Run What-If Model"),
+                                       withSpinner(plotlyOutput("diffWFhist")),
+                                       
+                                       HTML("<hr>"),
+                                       column(12, align="center", dataTableOutput("DIFFWFT", width = 700)),
+                                       
+                                       withSpinner(htmlOutput("tcapWF")),
+                                       fillRow(height = 100, width = 400,
+                                               numericInput("tcaplwf", "Min:", 40, min = 0, max = 100),
+                                               numericInput("tcapmlwf", "ML:", 50, min = 0, max = 100),
+                                               numericInput("tcaphwf", "Max:", 90, min = 0, max = 100),
+                                               numericInput("tcapconfwf", "Conf:", 5, min = 1, max = 5)
+                                       ),
+                                       actionButton("runwhatifmodel", "Run What-If Model"),
+                                       withSpinner(plotlyOutput("tcapWFhist")),
+                                       HTML("<hr>"),
+                                       
+                                       column(12, align="center", 
+                                              dataTableOutput("tcapWFT", width = 700), 
+                                              HTML("<hr>")
+                                       )
+                                       
+                                       
+                                       
+                                       
+                                   )   
+                                   
+                                   
+                            )
+                            
+                   ),
+                   
+                   tabPanel("Simulation Output Table",
+                            column(width = 12,
+                                   withSpinner(dataTableOutput("simtable"))
+                                   
+                            )
+                            
+                   )
+                   
+            )
+        )
+    )
+)
+
+########################################
+
+##### SERVER ########################
+
+########################################
+
+server <- function(input, output, session) {
+    
+    #### main risk calculation start
+    values <- reactiveValues() 
+    values$iterations <- 10000
+    observeEvent(input$runmodel, ignoreNULL = FALSE, {
+        withProgress(message = paste("Please Wait, Running Simulation", input$iterations, "Times"), value = 0, {
+            for(i in 1:50) {
+                incProgress(1/50)
+                Sys.sleep(0.5)
+            }
+            
+            values$iterations <- input$iterations
+            TEFestimate <- list(func = "mc2d::rpert", min = input$tefl, 
+                                mode = input$tefml, max = input$tefh,
+                                shape = input$tefconf)
+            TCestimate <- list(func = "mc2d::rpert", min = input$tcapl, 
+                               mode = input$tcapml, max = input$tcaph,
+                               shape = input$tcapconf)
+            DIFFestimate <- list(list(func = "mc2d::rpert", min = input$csl, 
+                                      mode = input$csml, max = input$csh, 
+                                      shape = input$csconf))
+            LMestimate <- list(func = "mc2d::rpert", min = input$lml, 
+                               mode = input$lmml, max = input$lmh, 
+                               shape = input$lmconf)
+            single_scen <- tidyrisk_scenario(
+                tef_params = TEFestimate, 
+                tc_params = TCestimate, 
+                diff_params = DIFFestimate, 
+                lm_params = LMestimate)
+            
+            values$simulation_result <- run_simulation(single_scen, iterations = values$iterations)
+            values$single_scen_table <- as.data.frame(single_scen)
+            values$TEFestimate <- TEFestimate
+            values$DIFFestimate <- DIFFestimate
+            values$LMestimate <- LMestimate
+            
+        })
+        
+        ######### get the table behind the histogram for values for analysis section
+        withProgress(message = "Generating Graphs", value = 0, {
+            for(i in 1:50) {
+                incProgress(1/50)
+                Sys.sleep(0.35)
+            }
+            ALE_Hist<- ggplot(values$simulation_result, aes(x = ale)) +
+                geom_histogram(binwidth = diff(range(values$simulation_result$ale) / 50), 
+                               aes(y = ..count..), 
+                               color = "black", 
+                               fill ="deepskyblue4") +
+                scale_x_continuous(labels = scales::dollar) +
+                labs(x = "Annual Expected Losses") +
+                theme_bw()
+            values$ALE_Hist <- ALE_Hist
+            pg <- layer_data(ALE_Hist, 1) %>% filter(x < mean(x) & x > 0)
+            values$pg <- pg %>% sample_n(1)
+        })
+        ############
+        
+        ###########get the table behind the LEC for values for analysis section
+        # calculate the probability of exceedance aka complementary cumulative probability function
+        ale_frame <- mutate(values$simulation_result, prob = 1 - percent_rank(values$simulation_result$ale))
+        # sort the results in ascending order of loss magnitude
+        ale_frame <- ale_frame[order(values$simulation_result$ale),]
+        LEC_Chart <- ggplot(ale_frame, mapping = aes(x = ale, y = prob))+
+            geom_path() + scale_y_continuous(labels = scales::percent)+
+            labs(y = "Probability of Loss")+
+            labs(x = "Annualized Loss Exposure (ALE)")+
+            scale_x_continuous(labels = scales::dollar)+
+            theme_bw()
+        values$LEC_Chart <- LEC_Chart
+        g2d <- subset(layer_data(LEC_Chart, 1), y<1.00 & y<0.7)
+        g2d <- sample_n(g2d, 1)
+        values$g2d <- g2d
+        
+        ####### Get Vuln data for analysis 
+        VULNsamples <- values$simulation_result %>% 
+            summarize(loss_events = sum(loss_events, na.rm = TRUE),
+                      avoided_events = sum(threat_events, na.rm = TRUE) - loss_events)
+        values$VULNsamples <- VULNsamples
+        
+        ###### Event Distribution Chart
+        VULNsamples <- values$simulation_result %>% 
+            summarize(loss_events = sum(loss_events, na.rm = TRUE),
+                      avoided_events = sum(threat_events, na.rm = TRUE) - loss_events) %>%  
+            tidyr::gather("key", "value", loss_events, avoided_events) %>% 
+            mutate(value = value / sum(value, na.rm = TRUE))
+        
+        event_Dist_chart <- ggplot(VULNsamples, aes(x = key, y = value)) + 
+            geom_col(fill = "steelblue") +
+            labs(x = "Event Type", y = "Percent") + 
+            scale_y_continuous(labels = scales::percent)+theme_bw()
+        values$event_Dist_chart <- event_Dist_chart
+        
+        
+        ############# Loss Distribution Chart
+        full_label <- ""
+        loss_Dist_Chart <- ggplot(values$simulation_result, aes(x = forcats::fct_reorder(full_label, desc(median(ale))), y = ale + 1)) +
+            stat_boxplot(geom = 'errorbar', width = 0.4) + 
+            geom_boxplot(fill = viridis::viridis(1), coef = 0, alpha = 1/3, outlier.shape = NA) +
+            viridis::scale_fill_viridis(discrete = TRUE) +
+            scale_y_continuous(label = scales::dollar) + annotation_logticks(sides = "l") +
+            guides(fill = FALSE) +
+            labs(x = NULL, y = "Annual Loss") +
+            theme(panel.grid.major.x = element_line()) +
+            theme(panel.grid.minor.x = element_line(color = "grey92")) +
+            theme(axis.title.y = element_text(angle = 0, vjust = 0.5, hjust = 0)) +
+            coord_flip()+theme_bw()
+        
+        values$loss_Dist_Chart <- loss_Dist_Chart  
+        
+        
+    })
+    
+    
+    
+    ###### Main Risk Calculation end
+    
+    
+    ##################################################################### DASHBOARD PLOTS ##################################################################### 
+    #Outputs for UI
+    #Value At Risk
+    output$agg_riskout <- renderValueBox({
+        agg_risk <- quantile(values$simulation_result$ale, 0.95)
+        valueBox(dollar(round(agg_risk, 0)), "Value at Risk", 
+                 icon = icon("eye"),
+                 color = "light-blue")
+    })
+    
+    #Percentile
+    output$percentout <- renderText({
+        values$percentile <- quantile(values$simulation_result$ale, (input$percent / 100))
+        paste("<strong>","<h3 style='font-size: 300%; text-align: center'>", dollar(round(values$percentile, 0)),
+              "</h3>", "</strong>"
+        )
+    })
+    
+    #Minimum Loss
+    output$ELout <- renderValueBox({
+        loss_exceedance <- min(values$simulation_result$ale)
+        valueBox(dollar(round(loss_exceedance, 0)), "Minimum Expected Annual Losses", 
+                 icon = icon("exclamation-triangle"), 
+                 color = "light-blue")
+        
+    })
+    
+    #Annual Loss Events 
+    output$loss_eventsout <-  renderValueBox({
+        loss_events <- median(values$simulation_result$loss_events)
+        valueBox(scales::comma(loss_events), "Expected Annual Loss Events",
+                 icon = icon("flag"),
+                 color = "light-blue")
+    })
+    
+    #ALE Histogram
+    output$alehistout <-  renderPlotly({
+        values$ALE_Hist
+    })
+    
+    #LEC Graph
+    output$LECout <- renderPlotly({
+        values$LEC_Chart
+    })
+    
+    #Summary Table
+    output$summaryout <- renderTable({
+        summary_data <- summarize_scenario(values$simulation_result)
+        
+        summary_data <- mutate_at(summary_data, .funs = dollar, 
+                                  .vars = vars(ale_median, ale_max, ale_var, sle_mean, 
+                                               sle_median, sle_max, sle_min)) %>% 
+            mutate(mean_diff_exceedance = percent(round(mean_diff_exceedance))) %>%
+            mutate(mean_tc_exceedance = ifelse(is.nan(mean_tc_exceedance), 
+                                               NA, 
+                                               percent(mean_tc_exceedance))) %>%
+            mutate(mean_vuln = percent(mean_vuln))
+        names(summary_data) <- stringi::stri_trans_totitle(gsub("_", " ", names(summary_data)))
+        summary_data <- rename(summary_data, 
+                               "Succesful Threat Events" = "Mean Vuln",
+                               "Control Gap" = "Mean Tc Exceedance")
+        # summary_data <- summary_data %>% mutate_all(as.character) %>% 
+        #     tidyr::gather(key = "Parameter", value = "Value")
+        summary_data
+    })
+    
+    #Events Distribution
+    output$eventsout <-  renderPlotly({
+        values$event_Dist_chart
+    })
+    
+    #Loss Distribution
+    
+    output$lossdisout <-  renderPlotly({
+        values$loss_Dist_Chart
+    })
+    ##################################################################### DASHBOARD PLOTS END ##################################################################### 
+    
+    ##################################################################### Analysis PLOTS #####################################################################
+    
+    ######INPUTS#######
+    output$inputsOut <- renderText({
+        paste("<b>Date: </b>", Sys.time(),"<br>", 
+              "<b>Risk Statement: </b>", input$rs
+        )
+    })
+    ###### Diagram
+    output$digramout <- renderDiagrammeR({
+        grViz("digraph {
+          # node definitions with substituted label text
+          node [fontname = Helvetica, shape = box, style = filled, fontsize = 8]
+          tab1 [label = '@@1']
+          tab2 [label = '@@2']
+          tab3 [label = '@@3']
+          tab4 [label = '@@4']
+          tab5 [label = '@@5']
+          tab6 [label = '@@6']
+          tab7 [label = '@@7']
+          tab8 [label = '@@8']
+          tab9 [label = '@@9']
+
+          # edge definitions with the node IDs
+          tab1 -> tab2;
+          tab1 -> tab3;
+          tab2 -> tab4;
+          tab2 -> tab7;
+          tab4 -> tab5;
+          tab4 -> tab6;
+          tab7 -> tab8;
+          tab7 -> tab9;
+  }
+
+          [1]: 'Risk'
+          [2]: 'Loss Event Frequency (LEF)'
+          [3]: 'Loss Magnitude'
+          [4]: 'Threat Event Frequency (TEF)'
+          [5]: 'Contact Frequency'
+          [6]: 'Probability of Action'
+          [7]: 'Vulnerability'
+          [8]: 'Threat Capability (TCAP)'
+          [9]: 'Difficulty'
+          ")
+    })
+    
+    ######Summary#######
+    
+    output$summaryOut <- renderText({
+        paste("<p style='font-size: 130%;'> This report is based on running a Monte carol simulation","<b>", input$iterations, "</b>",
+              "times and uses FAIR Risk Approach, inputs to a FAIR analysis are distributions and the Monte Carlo functions that perform the underlying calculations generate distributions as output. 
+          Using distributions as inputs and outputs are critical components of any credible risk analysis because they more faithfully represent the uncertainty that's inherent in any analysis. 
+          What this table represents is a distribution of results given the inputs you provided. There is a minimum value, 
+          which is the lowest value generated by the Monte Carlo function, a maximum value, which is the largest generated value, as well as an average and a most likely value.<p/>")
+    })
+    
+    output$summaryTableOut <- renderTable({
+        overall <- summarize_iterations(values$simulation_result)
+        overalldb <- tibble::tibble(
+            "Value at Risk" = dollar(round(quantile(overall$ale_sum, c(0.95)))),
+            "Maximum Loss" = dollar(round(max(overall$ale_sum))),
+            "Mean Loss" = dollar(round(mean(overall$ale_sum))),
+            "Minimum Loss" = dollar(round(min(overall$ale_sum)))
+        )
+        overalldb
+    }, width = "100%")
+    
+    output$ALEOut <- renderText({
+        paste("<p style='font-size: 130%;'> The graph below shows a histogram of the cumulative annualized loss exposure (ALE) in bins. For example we can see that an annualized loss of","<b>",
+              dollar(round(values$pg$x)), "</b>",
+              "occurred ", "<b>", round(values$pg$y), "</b>", "times during the", input$iterations, 
+              "simulations. This is one way to look at the results of the simulations, spread amongst the various bins to show the most prominent results. 
+          This can be a very effective visual for comparing two or more scenarios at a glance which we will see in the what-if section in this analysis.</p>")
+        
+    })
+    output$alehistout2 <-  renderPlotly({
+        values$ALE_Hist
+    })
+    output$LECOut <- renderText({
+        paste("<p style='font-size: 130%;'> A Loss Exceedance Chart (LEC) is a way to visualize the probability of the loss exceeding a certain amount. 
+          LECs show the results (as a loss exceedance curve or exceedance probability curve) of applying Monte Carlo simulations to a FAIR risk analysis. 
+          Based on the inputs provided in this analysis There is a ","<b>",
+              percent(round(values$g2d$y, 1)), "</b>",
+              "probability of a loss being ", "<b>", dollar(round(values$g2d$x, 0)), "</b>", 
+              "or greater.</p>")
+        
+    })
+    
+    output$LECout2 <- renderPlotly({
+        values$LEC_Chart
+    })
+    
+    output$vulnOut <- renderText({
+        paste("<p style='font-size: 130%;'> Each scenario generates a number of threat contact events where the threat community has the opportunity to act against the organization's assets and result in a loss. 
+          Whenever the threat community acts and the organization's capabilities prevent the attack, no loss occurs and a contained event is recorded in the simulation. 
+          Each threat community action that is not prevented by the organization's capabilities is recorded as a loss event. 
+          The distribution of loss vs. contained events is displayed below. In this scenario there was:", "<br>", "<b>",
+              values$VULNsamples$loss_events, "</b>", "Loss Events which is", "<b>",percent(values$VULNsamples$loss_events / sum(values$VULNsamples$loss_events + values$VULNsamples$avoided_events)), "</b>",
+              "of the total threat events of this scenario", "<br>","and ", "<b>",values$VULNsamples$avoided_events, "</b>", "Threats not converted to loss due to controls which is",
+              "<b>", percent(values$VULNsamples$avoided_events / sum(values$VULNsamples$loss_events + values$VULNsamples$avoided_events)), "</b>", 
+              "of the total threat events of this scenario.</p>")
+        
+    })
+    
+    output$eventsout2 <-  renderPlotly({
+        values$event_Dist_chart
+    })
+    
+    output$diffOut <- renderText({
+        paste(
+            "<ul style='font-size: 130%;'>",
+            "<li> The vulnerability percentage for this scenario is", "<b>",percent(mean(values$simulation_result$vuln, na.rm = TRUE)), "</b>",
+            "this percentage indicates that our controls was vulnerable on average ", "<b>", percent(mean(values$simulation_result$vuln, na.rm = TRUE)), "</b>",
+            "of the times. If this value said 100% it would mean that every threat event would become a loss event. Likewise, vulnerability of 0% means threat events should almost never result in loss.</li>",
+            "<br>",
+            "<li> The average controls gap percentage for this scenario is ", "<b>", paste0(round(mean(values$simulation_result$mean_tc_exceedance, na.rm = TRUE), 0), "%"),"</b>",
+            "This percentage indicates the mean percentage of threat capability exceeding difficulty on successful threat events. 
+      This is the gap between the controls and the threat capability, if we raise our controls difficulty this percentage should drop (See what-if section below)",
+            "<br>",
+            "<li> The average percentage of difficulty exceeding threat capability on defended events for this scenario is ", "<b>",
+            paste0(round(mean(values$simulation_result$mean_diff_exceedance, na.rm = TRUE), 0), "%"), "</b>",
+            "This percentage indicates how effective are the controls you have in place based on the input range provided in this scenario.",
+            "</ul>"
+        )
+        
+    })
+    
+    ##################################################################################
+    ########################## 1st WHAT IF CALCULATIONS START ############################
+    observeEvent(input$runwhatifmodel, {
+        withProgress(message = paste("Please Wait, Running What-If Simulation", input$iterations, "Times"), value = 0, {
+            for(i in 1:50) {
+                incProgress(1/50)
+                Sys.sleep(0.5)
+            }
+            
+            
+            values$iterationswf <- input$iterations
+            TEFestimatewf <- list(func = "mc2d::rpert", min = input$tefl, 
+                                  mode = input$tefml, max = input$tefh,
+                                  shape = input$tefconf)
+            TCestimatewf <- list(func = "mc2d::rpert", min = input$tcaplwf, 
+                                 mode = input$tcapmlwf, max = input$tcaphwf,
+                                 shape = input$tcapconfwf)
+            DIFFestimatewf <- list(list(func = "mc2d::rpert", min = input$csl, 
+                                        mode = input$csml, max = input$csh, 
+                                        shape = input$csconf))
+            LMestimatewf <- list(func = "mc2d::rpert", min = input$lml, 
+                                 mode = input$lmml, max = input$lmh, 
+                                 shape = input$lmconf)
+            
+            single_scenwf <- tidyrisk_scenario(
+                tef_params = TEFestimatewf, 
+                tc_params = TCestimatewf, 
+                diff_params = DIFFestimatewf, 
+                lm_params = LMestimatewf)
+            
+            values$simulation_resultwf <- run_simulation(single_scenwf, iterations = values$iterationswf)
+            
+            overallwf <- summarize_iterations(values$simulation_resultwf)
+            overalldbwf <- tibble::tibble(
+                "Value_at_Risk" = round(quantile(overallwf$ale_sum, c(0.95))),
+                "Maximum_Loss" = round(max(overallwf$ale_sum)),
+                "Mean_Loss" = round(mean(overallwf$ale_sum)),
+                "Minimum_Loss" = round(min(overallwf$ale_sum))
+            )
+            # overalldb <- overalldb %>% mutate_all(as.character) %>% 
+            #   tidyr::gather(key = "Parameter", value = "Value")
+            values$overalldbwf <- overalldbwf
+            
+            overall <- summarize_iterations(values$simulation_result)
+            overalldb <- tibble::tibble(
+                "Value_at_Risk" = round(quantile(overall$ale_sum, c(0.95))),
+                "Maximum_Loss" = round(max(overall$ale_sum)),
+                "Mean_Loss" = round(mean(overall$ale_sum)),
+                "Minimum_Loss" = round(min(overall$ale_sum))
+            )
+            values$overalldb <- overalldb
+            # overalldb <- overalldb %>% mutate_all(as.character) %>% 
+            #   tidyr::gather(key = "Parameter", value = "Value")
+            values$overalldb <- overalldb
+            value_at_risk_diff <- diff(c(values$overalldb$Value_at_Risk, values$overalldbwf$Value_at_Risk))
+            max_loss_diff <- diff(c(values$overalldb$Maximum_Loss, values$overalldbwf$Maximum_Loss))
+            mean_loss_diff <- diff(c(values$overalldb$Mean_Loss, values$overalldbwf$Mean_Loss))
+            minimum_loss_diff <- diff(c(values$overalldb$Minimum_Loss, values$overalldbwf$Minimum_Loss))
+            
+            
+            values$value_at_risk_diff <- value_at_risk_diff
+            values$max_loss_diff <- max_loss_diff
+            values$mean_loss_diff <- mean_loss_diff
+            values$minimum_loss_diff <- minimum_loss_diff
+            
+            #original values
+            VULNsamples <- values$simulation_result %>% 
+                summarize(loss_events = sum(loss_events, na.rm = TRUE),
+                          avoided_events = sum(threat_events, na.rm = TRUE) - loss_events)
+            values$VULNsamples <- VULNsamples
+            
+            #what-if values
+            VULNsampleswf <- values$simulation_resultwf %>% 
+                summarize(loss_eventswf = sum(loss_events, na.rm = TRUE),
+                          avoided_eventswf = sum(threat_events, na.rm = TRUE) - loss_eventswf)
+            values$VULNsampleswf <- VULNsampleswf
+            
+            #calculate loss event differance
+            loss_event_diff <- diff(c(values$VULNsamples$loss_events, values$VULNsampleswf$loss_eventswf))
+            values$loss_event_diff = loss_event_diff
+            
+            #calculated avoided loss diff
+            avoided_loss_event_diff <- diff(c(values$VULNsamples$avoided_events, values$VULNsampleswf$avoided_eventswf))
+            values$avoided_loss_event_diff = avoided_loss_event_diff
+            
+            #Calculate loss event percentage and percentage differance
+            loss_event_percent <- values$VULNsamples$loss_events / sum(values$VULNsamples$loss_events + values$VULNsamples$avoided_events)
+            loss_event_percentwf <- values$VULNsampleswf$loss_eventswf / sum(values$VULNsampleswf$loss_eventswf + values$VULNsampleswf$avoided_eventswf)
+            loss_event_diff_percent <- diff(c(loss_event_percent, loss_event_percentwf))
+            values$loss_event_diff_percent <- loss_event_diff_percent
+            
+            #Calculate avoided loss event percentage and percentage differance
+            avoided_loss_event_percent <- values$VULNsamples$avoided_events / sum(values$VULNsamples$loss_events + values$VULNsamples$avoided_events)
+            avoided_loss_event_percentwf <- values$VULNsampleswf$avoided_eventswf / sum(values$VULNsampleswf$loss_eventswf +  values$VULNsampleswf$avoided_eventswf)
+            avoided_loss_event_diff_percent <- diff(c(avoided_loss_event_percent, avoided_loss_event_percentwf))
+            values$avoided_loss_event_diff_percent <- avoided_loss_event_diff_percent
+            
+            #calculate vulnerbility differance
+            percent_vuln <- mean(values$simulation_result$vuln, na.rm = TRUE)
+            percent_vulnwf <- mean(values$simulation_resultwf$vuln, na.rm = TRUE)
+            percentvuln_diff <- diff(c(percent_vuln, percent_vulnwf))
+            values$percentvuln_diff <- with_plus(percent(percentvuln_diff))
+            values$percent_vuln = percent_vuln
+            values$percent_vulnwf = percent_vulnwf
+            
+            #control gap differance
+            original_control_gap <- round(mean(values$simulation_result$mean_tc_exceedance, na.rm = TRUE), 0)
+            original_control_gapwf <- round(mean(values$simulation_resultwf$mean_tc_exceedance, na.rm = TRUE), 0)
+            contrtol_gap_diff <- diff(c(original_control_gap, original_control_gapwf))
+            values$contrtol_gap_diff <- paste0(with_plus(contrtol_gap_diff), "%")
+            values$original_control_gap <- paste0(original_control_gap, "%")
+            values$original_control_gapwf <- paste0(original_control_gapwf, "%")
+            
+            #Percent diffeculty differance
+            original_difficulty <- round(mean(values$simulation_result$mean_diff_exceedance, na.rm = TRUE), 0)
+            original_difficultywf <- round(mean(values$simulation_resultwf$mean_diff_exceedance, na.rm = TRUE), 0)
+            difficulty_diff <- diff(c(original_difficulty, original_difficultywf))
+            values$difficulty_diff <- paste0(with_plus(difficulty_diff), "%")
+            values$original_difficulty <- paste0(original_difficulty, "%")
+            values$original_difficultywf <- paste0(original_difficultywf, "%")
+        })
+    })
+    ##################################################################################
+    ########################## 1st WHAT IF CALCULATIONS END ############################
+    
+    output$tcapWF <- renderText({
+        paste("<p style='font-size: 130%;'>", "</p>", "<b>", "<h3>",
+              "Threat capabilities are increased and our controls stay the same?", "</h3>", "<b>", "<br>",
+              "<li style='font-size: 130%;'>", 
+              "What-If the threat capabilities are increased and our controls stay the same?
+          change the threat capabilities parameters below to a higher percentage than the original scenario inputs then click Run What-If Model
+          to compare the results to the original scenario inputs.",
+              "</li>")
+        
+    })
+    #Plot for TCAP What-IF Scenario 
+    output$tcapWFhist <- renderPlotly({
+        if (input$runwhatifmodel != 0) {
+            withProgress(message = "Generating Comparison Graph", value = 0, {
+                for(i in 1:50) {
+                    incProgress(1/50)
+                    Sys.sleep(0.3)
+                }
+                gg <- ggplot(values$simulation_result, aes(x = ale, fill ="Original"))
+                gg <- gg + geom_histogram(binwidth = diff(range(values$simulation_result$ale) / 50), 
+                                          aes(y = ..count..), 
+                                          color = "black", 
+                                          alpha = 0.5)
+                gg <- gg + geom_histogram(data = values$simulation_resultwf, 
+                                          binwidth = diff(range(values$simulation_resultwf$ale) / 50), 
+                                          aes(y = ..count.., fill ="New"), 
+                                          color = "black",
+                                          alpha = 0.2)
+                gg <- gg + scale_x_continuous(labels = scales::dollar)
+                gg <- gg +   scale_fill_manual(values = c(Original = "deepskyblue4",
+                                                          New = "red"), name="Legends")
+                gg <- gg + labs(x = "Annual Expected Losses")
+                gg <- gg + theme(legend.position = "bottom")
+                gg4 <- ggplotly(gg)
+                gg4
+            })
+        }})
+    
+    ####### TCAP Changes Table
+    output$tcapWFT <- renderDataTable({
+        if (input$runwhatifmodel != 0) {
+            ######### Creat a table for new value
+            TCAPT_T <- matrix(c(dollar(values$overalldb$Value_at_Risk), dollar(values$overalldbwf$Value_at_Risk), with_plus_dollar(values$value_at_risk_diff),
+                                dollar(values$overalldb$Maximum_Loss), dollar(values$overalldbwf$Maximum_Loss), with_plus_dollar(values$max_loss_diff),
+                                dollar(values$overalldb$Mean_Loss), dollar(values$overalldbwf$Mean_Loss), with_plus_dollar(values$mean_loss_diff), 
+                                values$overalldb$Minimum_Loss, values$overalldbwf$Minimum_Loss, with_plus_dollar(values$minimum_loss_diff), 
+                                values$VULNsamples$loss_events, values$VULNsampleswf$loss_eventswf, with_plus(values$loss_event_diff), 
+                                values$VULNsamples$avoided_events, values$VULNsampleswf$avoided_eventswf, with_plus(values$avoided_loss_event_diff),  
+                                percent(values$percent_vuln), percent(values$percent_vulnwf), values$percentvuln_diff, 
+                                values$original_control_gap, values$original_control_gapwf, values$contrtol_gap_diff, 
+                                values$original_difficulty, values$original_difficultywf, values$difficulty_diff
+            ), ncol = 3, byrow = TRUE, dimnames = list(
+                c("Value At Risk", "Maximum Loss", "Mean Loss", "Minimum Loss", "Loss Events", "Avoided Loss", "Vulnerability Percentage", "Control Gap", "Difficulty Percentage"),
+                c("Original Value", "New Value", "Change")
+            )
+            )
+            TCAPT_T <- datatable(TCAPT_T, extensions = 'Buttons', options = list(dom = 'tB',
+                                                                                 buttons = 
+                                                                                     list('copy', list(
+                                                                                         extend = 'collection',
+                                                                                         buttons = c('csv', 'excel', 'pdf'),
+                                                                                         text = 'Download'))
+            )) %>%
+                #Style Row names of DT
+                formatStyle(columns = " ",
+                            fontSize = "18px",
+                            fontWeight = "bold"
+                )
+            TCAPT_T <- formatStyle(TCAPT_T, 
+                                   columns = c(1,2,3),
+                                   fontSize = "16PX")
+            
+        }}
+    )
+    
+    ##################################################################################
+    ########################## 2nd WHAT IF CALCULATIONS START ############################
+    observeEvent(input$runwhatifmodel2, {
+        withProgress(message = paste("Please Wait, Running What-If Simulation", input$iterations, "Times"), value = 0, {
+            for(i in 1:50) {
+                incProgress(1/50)
+                Sys.sleep(0.5)
+            }
+            
+            values$iterationswf2 <- input$iterations
+            TEFestimatewf2 <- list(func = "mc2d::rpert", min = input$tefl,
+                                   mode = input$tefml, max = input$tefh,
+                                   shape = input$tefconf)
+            TCestimatewf2 <- list(func = "mc2d::rpert", min = input$tcapl,
+                                  mode = input$tcapml, max = input$tcaph,
+                                  shape = input$tcapconf)
+            DIFFestimatewf2 <- list(list(func = "mc2d::rpert", min = input$cslwf,
+                                         mode = input$csmlwf, max = input$cshwf,
+                                         shape = input$csconfwf))
+            LMestimatewf2 <- list(func = "mc2d::rpert", min = input$lml,
+                                  mode = input$lmml, max = input$lmh,
+                                  shape = input$lmconf)
+            
+            single_scenwf2 <- tidyrisk_scenario(
+                tef_params = TEFestimatewf2,
+                tc_params = TCestimatewf2,
+                diff_params = DIFFestimatewf2,
+                lm_params = LMestimatewf2)
+            
+            values$simulation_resultwf2 <- run_simulation(single_scenwf2, iterations = values$iterationswf2)
+            
+            overallwf2 <- summarize_iterations(values$simulation_resultwf2)
+            overalldbwf2 <- tibble::tibble(
+                "Value_at_Risk" = round(quantile(overallwf2$ale_sum, c(0.95))),
+                "Maximum_Loss" = round(max(overallwf2$ale_sum)),
+                "Mean_Loss" = round(mean(overallwf2$ale_sum)),
+                "Minimum_Loss" = round(min(overallwf2$ale_sum))
+            )
+            # overalldb <- overalldb %>% mutate_all(as.character) %>%
+            #   tidyr::gather(key = "Parameter", value = "Value")
+            values$overalldbwf2 <- overalldbwf2
+            
+            overall <- summarize_iterations(values$simulation_result)
+            overalldb <- tibble::tibble(
+                "Value_at_Risk" = round(quantile(overall$ale_sum, c(0.95))),
+                "Maximum_Loss" = round(max(overall$ale_sum)),
+                "Mean_Loss" = round(mean(overall$ale_sum)),
+                "Minimum_Loss" = round(min(overall$ale_sum))
+            )
+            # overalldb <- overalldb %>% mutate_all(as.character) %>%
+            #   tidyr::gather(key = "Parameter", value = "Value")
+            values$overalldb <- overalldb
+            
+            value_at_risk_diff2 <- diff(c(values$overalldb$Value_at_Risk, values$overalldbwf2$Value_at_Risk))
+            max_loss_diff2 <- diff(c(values$overalldb$Maximum_Loss, values$overalldbwf2$Maximum_Loss))
+            mean_loss_diff2 <- diff(c(values$overalldb$Mean_Loss, values$overalldbwf2$Mean_Loss))
+            minimum_loss_diff2 <- diff(c(values$overalldb$Minimum_Loss, values$overalldbwf2$Minimum_Loss))
+            
+            
+            values$value_at_risk_diff2 <- value_at_risk_diff2
+            values$max_loss_diff2 <- max_loss_diff2
+            values$mean_loss_diff2 <- mean_loss_diff2
+            values$minimum_loss_diff2 <- minimum_loss_diff2
+            
+            #original values
+            VULNsamples <- values$simulation_result %>%
+                summarize(loss_events = sum(loss_events, na.rm = TRUE),
+                          avoided_events = sum(threat_events, na.rm = TRUE) - loss_events)
+            values$VULNsamples <- VULNsamples
+            
+            #what-if values
+            VULNsampleswf2 <- values$simulation_resultwf2 %>%
+                summarize(loss_eventswf2 = sum(loss_events, na.rm = TRUE),
+                          avoided_eventswf2 = sum(threat_events, na.rm = TRUE) - loss_eventswf2)
+            values$VULNsampleswf2 <- VULNsampleswf2
+            
+            #calculate loss event differance
+            loss_event_diff2 <- diff(c(values$VULNsamples$loss_events, values$VULNsampleswf2$loss_eventswf2))
+            values$loss_event_diff2 = loss_event_diff2
+            
+            #calculated avoided loss diff
+            avoided_loss_event_diff2 <- diff(c(values$VULNsamples$avoided_events, values$VULNsampleswf2$avoided_eventswf2))
+            values$avoided_loss_event_diff2 = avoided_loss_event_diff2
+            
+            #Calculate loss event percentage and percentage differance
+            loss_event_percent2 <- values$VULNsamples$loss_events / sum(values$VULNsamples$loss_events + values$VULNsamples$avoided_events)
+            loss_event_percentwf2 <- values$VULNsampleswf2$loss_eventswf2 / sum(values$VULNsampleswf2$loss_eventswf2 + values$VULNsampleswf2$avoided_eventswf2)
+            loss_event_diff_percent2 <- diff(c(loss_event_percent2, loss_event_percentwf2))
+            values$loss_event_diff_percent2 <- loss_event_diff_percent2
+            
+            #Calculate avoided loss event percentage and percentage differance
+            avoided_loss_event_percent2 <- values$VULNsamples$avoided_events / sum(values$VULNsamples$loss_events + values$VULNsamples$avoided_events)
+            avoided_loss_event_percentwf2 <- values$VULNsampleswf2$avoided_eventswf2 / sum(values$VULNsampleswf2$loss_eventswf2 +  values$VULNsampleswf2$avoided_eventswf2)
+            avoided_loss_event_diff_percent2 <- diff(c(avoided_loss_event_percent2, avoided_loss_event_percentwf2))
+            values$avoided_loss_event_diff_percent2 <- avoided_loss_event_diff_percent2
+            
+            #calculate vulnerbility differance
+            percent_vuln2 <- mean(values$simulation_result$vuln, na.rm = TRUE)
+            percent_vulnwf2 <- mean(values$simulation_resultwf2$vuln, na.rm = TRUE)
+            percentvuln_diff2 <- diff(c(percent_vuln2, percent_vulnwf2))
+            values$percentvuln_diff2 <- with_plus(percent(percentvuln_diff2))
+            values$percent_vuln2 = percent_vuln2
+            values$percent_vulnwf2 = percent_vulnwf2
+            
+            #control gap differance
+            original_control_gap2 <- round(mean(values$simulation_result$mean_tc_exceedance, na.rm = TRUE), 0)
+            original_control_gapwf2 <- round(mean(values$simulation_resultwf2$mean_tc_exceedance, na.rm = TRUE), 0)
+            contrtol_gap_diff2 <- diff(c(original_control_gap2, original_control_gapwf2))
+            values$contrtol_gap_diff2 <- paste0(with_plus(contrtol_gap_diff2), "%")
+            values$original_control_gap2 <- paste0(original_control_gap2, "%")
+            values$original_control_gapwf2 <- paste0(original_control_gapwf2, "%")
+            
+            #Percent diffeculty differance
+            original_difficulty2 <- round(mean(values$simulation_result$mean_diff_exceedance, na.rm = TRUE), 0)
+            original_difficultywf2 <- round(mean(values$simulation_resultwf2$mean_diff_exceedance, na.rm = TRUE), 0)
+            difficulty_diff2 <- diff(c(original_difficulty2, original_difficultywf2))
+            values$difficulty_diff2 <- paste0(with_plus(difficulty_diff2), "%")
+            values$original_difficulty2 <- paste0(original_difficulty2, "%")
+            values$original_difficultywf2 <- paste0(original_difficultywf2, "%")
+            
+        })
+    })
+    ##################################################################################
+    ########################## 2nd WHAT IF CALCULATIONS END ############################
+    
+    output$diffWF <- renderText({
+        paste("<b>", "<h3>", "<br>",
+              "What-If difficulties prsented by our controls changes (if our controls gets better or worsen)?", "</h3>", "<b>", "<br>",
+              "<li style='font-size: 130%;'>", 
+              "change the Difficulty presented by the controls parameters below to a higher percentage than the original scenario inputs then click Run What-If Model  
+          to compare the results to the original scenario inputs.",
+              "</li>")
+    })
+    #Plot for DIFF What-IF Scenario 
+    output$diffWFhist <- renderPlotly({
+        if (input$runwhatifmodel2 != 0) {
+            withProgress(message = "Generating Comparison Graph", value = 0, {
+                for(i in 1:50) {
+                    incProgress(1/50)
+                    Sys.sleep(0.3)
+                }
+                gg <- ggplot(values$simulation_result, aes(x = ale, fill ="Original"))
+                gg <- gg + geom_histogram(binwidth = diff(range(values$simulation_result$ale) / 50), 
+                                          aes(y = ..count..), 
+                                          color = "black", 
+                                          alpha = 0.5)
+                gg <- gg + geom_histogram(data = values$simulation_resultwf2, 
+                                          binwidth = diff(range(values$simulation_resultwf2$ale) / 50), 
+                                          aes(y = ..count.., fill ="New"), 
+                                          color = "black",
+                                          alpha = 0.2)
+                gg <- gg + scale_x_continuous(labels = scales::dollar)
+                gg <- gg +   scale_fill_manual(values = c(Original = "deepskyblue4",
+                                                          New = "red"), name="Legends")
+                gg <- gg + labs(x = "Annual Expected Losses")
+                gg <- gg + theme(legend.position = "bottom")
+                gg5 <- ggplotly(gg)
+                gg5
+            })
+        }})
+    
+    ####### DIFF Changes Table
+    output$DIFFWFT <- renderDataTable({
+        if (input$runwhatifmodel2 != 0) {
+            ######### Creat a table for new DIFF value
+            DIFF_T <- matrix(c(dollar(values$overalldb$Value_at_Risk), dollar(values$overalldbwf2$Value_at_Risk), with_plus_dollar(values$value_at_risk_diff2),
+                               dollar(values$overalldb$Maximum_Loss), dollar(values$overalldbwf2$Maximum_Loss), with_plus_dollar(values$max_loss_diff2),
+                               dollar(values$overalldb$Mean_Loss), dollar(values$overalldbwf2$Mean_Loss), with_plus_dollar(values$mean_loss_diff2), 
+                               values$overalldb$Minimum_Loss, values$overalldbwf2$Minimum_Loss, with_plus_dollar(values$minimum_loss_diff2), 
+                               values$VULNsamples$loss_events, values$VULNsampleswf2$loss_eventswf2, with_plus(values$loss_event_diff2), 
+                               values$VULNsamples$avoided_events, values$VULNsampleswf2$avoided_eventswf2, with_plus(values$avoided_loss_event_diff2),  
+                               percent(values$percent_vuln2), percent(values$percent_vulnwf2), values$percentvuln_diff2, 
+                               values$original_control_gap2, values$original_control_gapwf2, values$contrtol_gap_diff2, 
+                               values$original_difficulty2, values$original_difficultywf2, values$difficulty_diff2
+            ), ncol = 3, byrow = TRUE, dimnames = list(
+                c("Value At Risk", "Maximum Loss", "Mean Loss", "Minimum Loss", "Loss Events", "Avoided Loss", "Vulnerability Percentage", "Control Gap", "Difficulty Percentage"),
+                c("Original Value", "New Value", "Change")
+            )
+            )
+            DIFF_T <- datatable(DIFF_T, extensions = 'Buttons', options = list(dom = 'tB',
+                                                                               buttons = 
+                                                                                   list('copy', list(
+                                                                                       extend = 'collection',
+                                                                                       buttons = c('csv', 'excel', 'pdf'),
+                                                                                       text = 'Download'))
+            )) %>%
+                #Style Row names of DT
+                formatStyle(columns = " ",
+                            fontSize = "18px",
+                            fontWeight = "bold"
+                )
+            DIFF_T <- formatStyle(DIFF_T, 
+                                  columns = c(1,2,3),
+                                  fontSize = "16PX")
+            
+        }}
+    )
+    ###### table for simulation output tab
+    output$simtable <- renderDataTable({
+        
+        values$single_scen_table <- datatable(values$simulation_result, extensions = 'Buttons', options = list(dom = 'tipB',
+                                                                                                               pageLength = 15,
+                                                                                                               buttons = 
+                                                                                                                   list('copy', list(
+                                                                                                                       extend = 'collection',
+                                                                                                                       buttons = c('csv', 'excel', 'pdf'),
+                                                                                                                       text = 'Download'))
+        ))
+    })
+    
+}
+
+shinyApp(ui, server)
+
+
+
+
